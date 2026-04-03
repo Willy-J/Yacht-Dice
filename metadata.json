@@ -1,0 +1,5 @@
+{
+  "name": "Yacht Dice Multiplayer",
+  "description": "A real-time multiplayer Yacht Dice (快艇骰子) game inspired by 51 Worldwide Games.",
+  "requestFramePermissions": []
+}
