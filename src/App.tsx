@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
+import React, { useEffect, useState, useRef } from 'react';
+import Peer, { DataConnection } from 'peerjs';
+import { v4 as uuidv4 } from 'uuid';
 import { RoomState, PlayerState, DiceFace, ScoreCategory, CATEGORIES } from './types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Dices, Trophy, User, AlertCircle, Check } from 'lucide-react';
+import { Dices, Trophy, User, AlertCircle, Check, Wifi, WifiOff } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -10,9 +11,7 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-let socket: Socket;
-
-// Helper to calculate potential score on client side
+// --- Game Logic Helpers ---
 function calculatePotentialScore(dice: DiceFace[], category: ScoreCategory): number {
   const counts = [0, 0, 0, 0, 0, 0, 0];
   let sum = 0;
@@ -62,105 +61,407 @@ function getTotalScore(player: PlayerState): number {
   return sum + bonus;
 }
 
+function createPlayer(id: string, name: string): PlayerState {
+  return {
+    id,
+    name,
+    dice: [1, 1, 1, 1, 1],
+    held: [false, false, false, false, false],
+    rollsLeft: 3,
+    scores: {},
+    ready: false,
+    hasRolled: false
+  };
+}
+
+// --- Session Storage ---
+interface SessionData {
+  roomId: string;
+  playerName: string;
+  role: 'host' | 'guest';
+  myId: string;
+}
+
+const SESSION_KEY = 'YACHT_SESSION';
+function getSession(): SessionData | null {
+  const s = sessionStorage.getItem(SESSION_KEY);
+  return s ? JSON.parse(s) : null;
+}
+function setSession(data: SessionData) {
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify(data));
+}
+function clearSession() {
+  sessionStorage.removeItem(SESSION_KEY);
+}
+
+// --- Main App ---
 export default function App() {
+  const [session, setSessionState] = useState<SessionData | null>(getSession());
+  
+  if (!session) {
+    return <JoinScreen onJoin={(data) => {
+      setSession(data);
+      setSessionState(data);
+    }} />;
+  }
+
+  return <GameContainer session={session} onLeave={() => {
+    clearSession();
+    setSessionState(null);
+  }} />;
+}
+
+// --- Join Screen ---
+function JoinScreen({ onJoin }: { onJoin: (data: SessionData) => void }) {
   const [roomId, setRoomId] = useState('');
   const [playerName, setPlayerName] = useState('');
-  const [room, setRoom] = useState<RoomState | null>(null);
-  const [error, setError] = useState('');
-  const [isConnected, setIsConnected] = useState(false);
-
-  useEffect(() => {
-    socket = io();
-
-    socket.on('connect', () => {
-      setIsConnected(true);
-    });
-
-    socket.on('disconnect', () => {
-      setIsConnected(false);
-      setRoom(null);
-    });
-
-    socket.on('room_state', (state: RoomState) => {
-      setRoom(state);
-      setError('');
-    });
-
-    socket.on('error', (msg: string) => {
-      setError(msg);
-    });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, []);
+  const [isHost, setIsHost] = useState(true);
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
     if (!roomId.trim() || !playerName.trim()) return;
-    socket.emit('join_room', { roomId, playerName });
+    
+    const myId = isHost ? `host-${uuidv4().slice(0,8)}` : `guest-${uuidv4().slice(0,8)}`;
+    onJoin({
+      roomId: roomId.toUpperCase(),
+      playerName,
+      role: isHost ? 'host' : 'guest',
+      myId
+    });
   };
 
-  if (!room) {
-    return (
-      <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 text-neutral-800 flex items-center justify-center p-4 font-sans">
-        <div className="max-w-md w-full bg-white/80 backdrop-blur-md p-8 rounded-3xl shadow-xl border border-white">
-          <div className="flex flex-col items-center justify-center mb-8">
-            <Dices className="w-16 h-16 text-emerald-500 mb-4 drop-shadow-sm" />
-            <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">Yacht Dice</h1>
-            <p className="text-emerald-600/80 mt-2 font-medium">快艇骰子</p>
-          </div>
-          
-          <form onSubmit={handleJoin} className="space-y-6">
-            <div>
-              <label className="block text-sm font-bold text-emerald-800 mb-2 uppercase tracking-wider">Player Name</label>
-              <input
-                type="text"
-                value={playerName}
-                onChange={(e) => setPlayerName(e.target.value)}
-                className="w-full bg-white/60 border-2 border-emerald-200 rounded-xl px-4 py-3 text-neutral-900 focus:outline-none focus:border-emerald-500 transition-all placeholder:text-neutral-400 font-medium"
-                placeholder="Enter your name"
-                maxLength={12}
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-bold text-emerald-800 mb-2 uppercase tracking-wider">Room Code</label>
-              <input
-                type="text"
-                value={roomId}
-                onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-                className="w-full bg-white/60 border-2 border-emerald-200 rounded-xl px-4 py-3 text-neutral-900 focus:outline-none focus:border-emerald-500 transition-all uppercase placeholder:text-neutral-400 font-medium"
-                placeholder="e.g. ROOM123"
-                maxLength={8}
-                required
-              />
-            </div>
-            
-            {error && (
-              <div className="flex items-center text-rose-600 text-sm bg-rose-50 p-3 rounded-lg border border-rose-200">
-                <AlertCircle className="w-4 h-4 mr-2 flex-shrink-0" />
-                {error}
-              </div>
-            )}
+  return (
+    <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 text-neutral-800 flex items-center justify-center p-4 font-sans">
+      <div className="max-w-md w-full bg-white/80 backdrop-blur-md p-8 rounded-3xl shadow-xl border border-white">
+        <div className="flex flex-col items-center justify-center mb-8">
+          <Dices className="w-16 h-16 text-emerald-500 mb-4 drop-shadow-sm" />
+          <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">Yacht Dice</h1>
+          <p className="text-emerald-600/80 mt-2 font-medium">P2P Multiplayer</p>
+        </div>
+        
+        <div className="flex gap-2 mb-6 bg-emerald-100/50 p-1 rounded-xl">
+          <button 
+            onClick={() => setIsHost(true)}
+            className={cn("flex-1 py-2 rounded-lg font-bold text-sm transition-all", isHost ? "bg-white text-emerald-700 shadow-sm" : "text-emerald-600/60 hover:text-emerald-700")}
+          >
+            Create Room
+          </button>
+          <button 
+            onClick={() => setIsHost(false)}
+            className={cn("flex-1 py-2 rounded-lg font-bold text-sm transition-all", !isHost ? "bg-white text-emerald-700 shadow-sm" : "text-emerald-600/60 hover:text-emerald-700")}
+          >
+            Join Room
+          </button>
+        </div>
 
-            <button
-              type="submit"
-              disabled={!isConnected}
-              className="w-full bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-white font-bold py-4 px-4 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl active:scale-95"
-            >
-              {isConnected ? 'Join Table' : 'Connecting...'}
-            </button>
-          </form>
+        <form onSubmit={handleJoin} className="space-y-6">
+          <div>
+            <label className="block text-sm font-bold text-emerald-800 mb-2 uppercase tracking-wider">Player Name</label>
+            <input
+              type="text"
+              value={playerName}
+              onChange={(e) => setPlayerName(e.target.value)}
+              className="w-full bg-white/60 border-2 border-emerald-200 rounded-xl px-4 py-3 text-neutral-900 focus:outline-none focus:border-emerald-500 transition-all placeholder:text-neutral-400 font-medium"
+              placeholder="Enter your name"
+              maxLength={12}
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-emerald-800 mb-2 uppercase tracking-wider">Room Code</label>
+            <input
+              type="text"
+              value={roomId}
+              onChange={(e) => setRoomId(e.target.value.toUpperCase())}
+              className="w-full bg-white/60 border-2 border-emerald-200 rounded-xl px-4 py-3 text-neutral-900 focus:outline-none focus:border-emerald-500 transition-all uppercase placeholder:text-neutral-400 font-medium"
+              placeholder="e.g. ROOM123"
+              maxLength={8}
+              required
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="w-full bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-white font-bold py-4 px-4 rounded-xl transition-all shadow-lg hover:shadow-xl active:scale-95"
+          >
+            {isHost ? 'Create & Host' : 'Join Table'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// --- Game Container (P2P Logic) ---
+function GameContainer({ session, onLeave }: { session: SessionData, onLeave: () => void }) {
+  const [room, setRoom] = useState<RoomState | null>(null);
+  const [error, setError] = useState('');
+  const [isConnected, setIsConnected] = useState(false);
+  
+  const peerRef = useRef<Peer | null>(null);
+  const connRef = useRef<DataConnection | null>(null);
+  const connectionsRef = useRef<Set<DataConnection>>(new Set());
+
+  const hostPeerId = `yacht-room-${session.roomId}`;
+  const LOCAL_STORAGE_KEY = `YACHT_STATE_${session.roomId}`;
+
+  useEffect(() => {
+    if (session.role === 'host') {
+      initHost();
+    } else {
+      initGuest();
+    }
+
+    return () => {
+      peerRef.current?.destroy();
+    };
+  }, []);
+
+  // --- HOST LOGIC ---
+  const initHost = () => {
+    const peer = new Peer(hostPeerId);
+    peerRef.current = peer;
+
+    // Load or create state
+    let state: RoomState;
+    const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (saved) {
+      state = JSON.parse(saved);
+      // Ensure host is in the room if restoring
+      if (!state.players[session.myId]) {
+        state.players[session.myId] = createPlayer(session.myId, session.playerName);
+        if (!state.playerOrder.includes(session.myId)) {
+          state.playerOrder.unshift(session.myId);
+        }
+      }
+    } else {
+      state = {
+        id: session.roomId,
+        players: { [session.myId]: createPlayer(session.myId, session.playerName) },
+        playerOrder: [session.myId],
+        status: 'waiting',
+        currentRound: 1,
+        activePlayerIndex: 0
+      };
+    }
+    
+    setRoom(state);
+    setIsConnected(true);
+
+    const broadcast = (newState: RoomState) => {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newState));
+      setRoom({...newState});
+      connectionsRef.current.forEach(c => {
+        if (c.open) c.send({ type: 'STATE', payload: newState });
+      });
+    };
+
+    peer.on('connection', (conn) => {
+      connectionsRef.current.add(conn);
+      
+      conn.on('open', () => {
+        // Send current state immediately
+        conn.send({ type: 'STATE', payload: state });
+      });
+
+      conn.on('data', (data: any) => {
+        if (data.type === 'JOIN') {
+          const { id, name } = data.payload;
+          if (!state.players[id]) {
+            if (state.playerOrder.length < 2) {
+              state.players[id] = createPlayer(id, name);
+              state.playerOrder.push(id);
+              if (state.playerOrder.length === 2) {
+                state.status = 'playing';
+              }
+            }
+          } else {
+            state.players[id].name = name; // Update name on reconnect
+          }
+          broadcast(state);
+        } 
+        else if (data.type === 'ACTION') {
+          handleGameAction(state, data.payload.action, data.payload.playerId, data.payload.value);
+          broadcast(state);
+        }
+      });
+
+      conn.on('close', () => {
+        connectionsRef.current.delete(conn);
+      });
+    });
+
+    peer.on('error', (err) => {
+      if (err.type === 'unavailable-id') {
+        setError('Room ID is already taken by another host. Please choose a different room code.');
+      } else {
+        setError(`Peer error: ${err.message}`);
+      }
+    });
+  };
+
+  // --- GUEST LOGIC ---
+  const initGuest = () => {
+    const peer = new Peer(session.myId);
+    peerRef.current = peer;
+
+    peer.on('open', () => {
+      connectToHost(peer);
+    });
+
+    peer.on('error', (err) => {
+      setError(`Peer error: ${err.message}`);
+      setIsConnected(false);
+    });
+  };
+
+  const connectToHost = (peer: Peer) => {
+    const conn = peer.connect(hostPeerId, { reliable: true });
+    connRef.current = conn;
+
+    conn.on('open', () => {
+      setIsConnected(true);
+      setError('');
+      conn.send({ type: 'JOIN', payload: { id: session.myId, name: session.playerName } });
+    });
+
+    conn.on('data', (data: any) => {
+      if (data.type === 'STATE') {
+        setRoom(data.payload);
+      }
+    });
+
+    conn.on('close', () => {
+      setIsConnected(false);
+      // Auto reconnect
+      setTimeout(() => {
+        if (peerRef.current && !peerRef.current.destroyed) {
+          connectToHost(peerRef.current);
+        }
+      }, 3000);
+    });
+  };
+
+  // --- Game Actions (Host executes these) ---
+  const handleGameAction = (state: RoomState, action: string, playerId: string, value?: any) => {
+    if (state.status !== 'playing' && action !== 'PLAY_AGAIN') return;
+    
+    if (action === 'ROLL') {
+      const player = state.players[playerId];
+      if (!player || player.rollsLeft <= 0) return;
+      player.dice = player.dice.map((d, i) => player.held[i] ? d : Math.floor(Math.random() * 6) + 1 as DiceFace);
+      player.rollsLeft--;
+      player.hasRolled = true;
+    } 
+    else if (action === 'TOGGLE_HOLD') {
+      const player = state.players[playerId];
+      if (!player || !player.hasRolled || player.rollsLeft <= 0) return;
+      player.held[value] = !player.held[value];
+    }
+    else if (action === 'SCORE') {
+      const player = state.players[playerId];
+      const category = value as ScoreCategory;
+      if (!player || !player.hasRolled || player.scores[category] !== undefined) return;
+      
+      player.scores[category] = calculatePotentialScore(player.dice, category);
+      
+      // Reset turn
+      player.dice = [1,1,1,1,1];
+      player.held = [false,false,false,false,false];
+      player.rollsLeft = 3;
+      player.hasRolled = false;
+      
+      // Next turn
+      state.activePlayerIndex = (state.activePlayerIndex + 1) % state.playerOrder.length;
+      
+      // Check round end
+      if (state.activePlayerIndex === 0) {
+        state.currentRound++;
+        if (state.currentRound > 12) {
+          state.status = 'game_over';
+          const p1 = state.players[state.playerOrder[0]];
+          const p2 = state.players[state.playerOrder[1]];
+          const s1 = getTotalScore(p1);
+          const s2 = getTotalScore(p2);
+          if (s1 > s2) state.winner = p1.id;
+          else if (s2 > s1) state.winner = p2.id;
+          else state.winner = 'tie';
+        }
+      }
+    }
+    else if (action === 'PLAY_AGAIN') {
+      const player = state.players[playerId];
+      if (!player) return;
+      player.ready = true;
+      
+      const allReady = state.playerOrder.every(id => state.players[id].ready);
+      if (allReady) {
+        state.status = 'playing';
+        state.currentRound = 1;
+        state.activePlayerIndex = 0;
+        state.winner = undefined;
+        state.playerOrder.forEach(id => {
+          const p = state.players[id];
+          p.scores = {};
+          p.ready = false;
+          p.dice = [1,1,1,1,1];
+          p.held = [false,false,false,false,false];
+          p.rollsLeft = 3;
+          p.hasRolled = false;
+        });
+      }
+    }
+  };
+
+  // --- Dispatch Action ---
+  const dispatchAction = (action: string, value?: any) => {
+    if (session.role === 'host') {
+      if (room) {
+        const newState = JSON.parse(JSON.stringify(room)); // deep copy
+        handleGameAction(newState, action, session.myId, value);
+        
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newState));
+        setRoom(newState);
+        connectionsRef.current.forEach(c => {
+          if (c.open) c.send({ type: 'STATE', payload: newState });
+        });
+      }
+    } else {
+      if (connRef.current?.open) {
+        connRef.current.send({ type: 'ACTION', payload: { action, playerId: session.myId, value } });
+      }
+    }
+  };
+
+  if (error && !room) {
+    return (
+      <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center">
+          <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-neutral-800 mb-2">Connection Error</h2>
+          <p className="text-neutral-600 mb-6">{error}</p>
+          <button onClick={onLeave} className="bg-emerald-500 text-white px-6 py-2 rounded-lg font-bold">Go Back</button>
         </div>
       </div>
     );
   }
 
-  return <GameBoard room={room} myId={socket.id} />;
+  if (!room) {
+    return (
+      <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 flex items-center justify-center">
+        <div className="animate-pulse flex flex-col items-center">
+          <Dices className="w-16 h-16 text-emerald-500 mb-4" />
+          <p className="text-emerald-800 font-bold">Connecting to P2P Network...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <GameBoard room={room} myId={session.myId} dispatchAction={dispatchAction} isConnected={isConnected} onLeave={onLeave} />;
 }
 
-function GameBoard({ room, myId }: { room: RoomState; myId: string }) {
+// --- Game Board UI ---
+function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room: RoomState; myId: string; dispatchAction: (action: string, val?: any) => void; isConnected: boolean; onLeave: () => void }) {
   const me = room.players[myId];
   const opponentId = room.playerOrder.find(id => id !== myId);
   const opponent = opponentId ? room.players[opponentId] : null;
@@ -171,13 +472,17 @@ function GameBoard({ room, myId }: { room: RoomState; myId: string }) {
   if (room.status === 'waiting') {
     return (
       <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 text-neutral-800 flex flex-col items-center justify-center p-4">
+        <div className="absolute top-4 right-4">
+          <button onClick={onLeave} className="text-emerald-700 bg-white/50 px-4 py-2 rounded-lg font-bold text-sm hover:bg-white transition-colors">Leave Room</button>
+        </div>
         <div className="animate-pulse flex flex-col items-center">
           <Dices className="w-20 h-20 text-emerald-500 mb-6 drop-shadow-sm" />
           <h2 className="text-3xl font-bold mb-4 text-emerald-900">Waiting for opponent...</h2>
-          <div className="bg-white/60 border border-emerald-200 px-6 py-3 rounded-2xl flex items-center shadow-sm">
+          <div className="bg-white/60 border border-emerald-200 px-6 py-3 rounded-2xl flex items-center shadow-sm mb-4">
             <span className="text-emerald-700 mr-3 font-medium uppercase tracking-wider text-sm">Room Code</span>
             <span className="font-mono text-2xl font-bold text-emerald-900 tracking-widest">{room.id}</span>
           </div>
+          <p className="text-emerald-600/80 text-sm">Share this code with your friend. They must choose "Join Room".</p>
         </div>
       </div>
     );
@@ -191,13 +496,16 @@ function GameBoard({ room, myId }: { room: RoomState; myId: string }) {
           <Dices className="w-6 h-6 text-emerald-500 mr-3" />
           <span className="font-black text-xl tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">Yacht Dice</span>
         </div>
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-4">
+          {!isConnected && (
+            <div className="flex items-center text-rose-500 bg-rose-50 px-3 py-1 rounded-full text-xs font-bold border border-rose-200">
+              <WifiOff className="w-3 h-3 mr-1" /> Reconnecting...
+            </div>
+          )}
           <div className="text-emerald-800 font-bold bg-emerald-100 px-4 py-1.5 rounded-full border border-emerald-200">
             Round <span className="text-emerald-950 ml-1">{room.currentRound} / 12</span>
           </div>
-          <div className="text-emerald-600 text-sm font-mono tracking-widest">
-            {room.id}
-          </div>
+          <button onClick={onLeave} className="text-emerald-700 bg-white/50 px-3 py-1.5 rounded-lg font-bold text-xs hover:bg-white transition-colors border border-emerald-200">Leave</button>
         </div>
       </header>
 
@@ -206,7 +514,7 @@ function GameBoard({ room, myId }: { room: RoomState; myId: string }) {
         
         {/* Left/Top: Scorecard */}
         <div className="w-full lg:w-[400px] flex-shrink-0 bg-white/40 border-r border-emerald-100 overflow-y-auto custom-scrollbar">
-          <Scorecard room={room} myId={myId} opponent={opponent} me={me} isActivePlayer={isActivePlayer} />
+          <Scorecard room={room} myId={myId} opponent={opponent} me={me} isActivePlayer={isActivePlayer} dispatchAction={dispatchAction} />
         </div>
 
         {/* Right/Bottom: Table & Dice */}
@@ -237,7 +545,7 @@ function GameBoard({ room, myId }: { room: RoomState; myId: string }) {
                     hidden={!activePlayer.hasRolled}
                     onClick={() => {
                       if (isActivePlayer && activePlayer.hasRolled && activePlayer.rollsLeft > 0) {
-                        socket.emit('toggle_hold', { roomId: room.id, index: i });
+                        dispatchAction('TOGGLE_HOLD', i);
                       }
                     }}
                     interactive={isActivePlayer && activePlayer.hasRolled && activePlayer.rollsLeft > 0}
@@ -252,11 +560,11 @@ function GameBoard({ room, myId }: { room: RoomState; myId: string }) {
               {isActivePlayer ? (
                 <div className="w-full flex flex-col gap-3">
                   <button
-                    onClick={() => socket.emit('roll_dice', room.id)}
-                    disabled={activePlayer.rollsLeft === 0}
+                    onClick={() => dispatchAction('ROLL')}
+                    disabled={activePlayer.rollsLeft === 0 || !isConnected}
                     className={cn(
                       "w-full font-black py-4 px-8 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center text-xl uppercase tracking-wider",
-                      activePlayer.rollsLeft > 0
+                      activePlayer.rollsLeft > 0 && isConnected
                         ? "bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-white shadow-emerald-500/30"
                         : "bg-neutral-200 text-neutral-400 cursor-not-allowed border border-neutral-300"
                     )}
@@ -322,7 +630,7 @@ function GameBoard({ room, myId }: { room: RoomState; myId: string }) {
               </div>
 
               <button
-                onClick={() => socket.emit('play_again', room.id)}
+                onClick={() => dispatchAction('PLAY_AGAIN')}
                 className={cn(
                   "w-full font-black py-5 px-8 rounded-2xl transition-all text-xl uppercase tracking-wider shadow-lg",
                   me.ready 
@@ -341,7 +649,7 @@ function GameBoard({ room, myId }: { room: RoomState; myId: string }) {
   );
 }
 
-function Scorecard({ room, myId, opponent, me, isActivePlayer }: { room: RoomState, myId: string, opponent: PlayerState | null, me: PlayerState, isActivePlayer: boolean }) {
+function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }: { room: RoomState, myId: string, opponent: PlayerState | null, me: PlayerState, isActivePlayer: boolean, dispatchAction: (action: string, val?: any) => void }) {
   
   const renderRow = (cat: typeof CATEGORIES[0]) => {
     const myScore = me.scores[cat.id];
@@ -365,7 +673,7 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer }: { room: RoomSta
           )}
           onClick={() => {
             if (canScore) {
-              socket.emit('score_category', { roomId: room.id, category: cat.id });
+              dispatchAction('SCORE', cat.id);
             }
           }}
         >
@@ -453,6 +761,7 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer }: { room: RoomSta
 }
 
 function Dice({ face, held, hidden, onClick, interactive, index }: { 
+  key?: React.Key;
   face: DiceFace; 
   held: boolean; 
   hidden?: boolean;
