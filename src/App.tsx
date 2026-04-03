@@ -114,17 +114,16 @@ export default function App() {
 // --- Join Screen ---
 function JoinScreen({ onJoin }: { onJoin: (data: SessionData) => void }) {
   const [roomId, setRoomId] = useState('');
-  const [playerName, setPlayerName] = useState('');
   const [isHost, setIsHost] = useState(true);
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!roomId.trim() || !playerName.trim()) return;
+    if (!roomId.trim()) return;
     
     const myId = isHost ? `host-${uuidv4().slice(0,8)}` : `guest-${uuidv4().slice(0,8)}`;
     onJoin({
       roomId: roomId.toUpperCase(),
-      playerName,
+      playerName: isHost ? '房主' : '访客',
       role: isHost ? 'host' : 'guest',
       myId
     });
@@ -135,8 +134,8 @@ function JoinScreen({ onJoin }: { onJoin: (data: SessionData) => void }) {
       <div className="max-w-md w-full bg-white/80 backdrop-blur-md p-8 rounded-3xl shadow-xl border border-white">
         <div className="flex flex-col items-center justify-center mb-8">
           <Dices className="w-16 h-16 text-emerald-500 mb-4 drop-shadow-sm" />
-          <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">Yacht Dice</h1>
-          <p className="text-emerald-600/80 mt-2 font-medium">P2P Multiplayer</p>
+          <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">快艇骰子</h1>
+          <p className="text-emerald-600/80 mt-2 font-medium">P2P 联机对战</p>
         </div>
         
         <div className="flex gap-2 mb-6 bg-emerald-100/50 p-1 rounded-xl">
@@ -144,37 +143,25 @@ function JoinScreen({ onJoin }: { onJoin: (data: SessionData) => void }) {
             onClick={() => setIsHost(true)}
             className={cn("flex-1 py-2 rounded-lg font-bold text-sm transition-all", isHost ? "bg-white text-emerald-700 shadow-sm" : "text-emerald-600/60 hover:text-emerald-700")}
           >
-            Create Room
+            创建房间
           </button>
           <button 
             onClick={() => setIsHost(false)}
             className={cn("flex-1 py-2 rounded-lg font-bold text-sm transition-all", !isHost ? "bg-white text-emerald-700 shadow-sm" : "text-emerald-600/60 hover:text-emerald-700")}
           >
-            Join Room
+            加入房间
           </button>
         </div>
 
         <form onSubmit={handleJoin} className="space-y-6">
           <div>
-            <label className="block text-sm font-bold text-emerald-800 mb-2 uppercase tracking-wider">Player Name</label>
-            <input
-              type="text"
-              value={playerName}
-              onChange={(e) => setPlayerName(e.target.value)}
-              className="w-full bg-white/60 border-2 border-emerald-200 rounded-xl px-4 py-3 text-neutral-900 focus:outline-none focus:border-emerald-500 transition-all placeholder:text-neutral-400 font-medium"
-              placeholder="Enter your name"
-              maxLength={12}
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-emerald-800 mb-2 uppercase tracking-wider">Room Code</label>
+            <label className="block text-sm font-bold text-emerald-800 mb-2 uppercase tracking-wider">房间号</label>
             <input
               type="text"
               value={roomId}
               onChange={(e) => setRoomId(e.target.value.toUpperCase())}
               className="w-full bg-white/60 border-2 border-emerald-200 rounded-xl px-4 py-3 text-neutral-900 focus:outline-none focus:border-emerald-500 transition-all uppercase placeholder:text-neutral-400 font-medium"
-              placeholder="e.g. ROOM123"
+              placeholder="例如：8888"
               maxLength={8}
               required
             />
@@ -184,7 +171,7 @@ function JoinScreen({ onJoin }: { onJoin: (data: SessionData) => void }) {
             type="submit"
             className="w-full bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-white font-bold py-4 px-4 rounded-xl transition-all shadow-lg hover:shadow-xl active:scale-95"
           >
-            {isHost ? 'Create & Host' : 'Join Table'}
+            {isHost ? '创建并主持' : '加入牌桌'}
           </button>
         </form>
       </div>
@@ -271,7 +258,7 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
             if (state.playerOrder.length < 2) {
               state.players[id] = createPlayer(id, name);
               state.playerOrder.push(id);
-              if (state.playerOrder.length === 2) {
+              if (state.playerOrder.length === 2 && state.status === 'waiting') {
                 state.status = 'playing';
               }
             }
@@ -293,9 +280,9 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
 
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id') {
-        setError('Room ID is already taken by another host. Please choose a different room code.');
+        setError('该房间号已被占用，请尝试其他房间号。');
       } else {
-        setError(`Peer error: ${err.message}`);
+        setError(`连接错误: ${err.message}`);
       }
     });
   };
@@ -310,7 +297,7 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
     });
 
     peer.on('error', (err) => {
-      setError(`Peer error: ${err.message}`);
+      setError(`连接错误: ${err.message}`);
       setIsConnected(false);
     });
   };
@@ -344,6 +331,11 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
 
   // --- Game Actions (Host executes these) ---
   const handleGameAction = (state: RoomState, action: string, playerId: string, value?: any) => {
+    if (action === 'LEAVE_ROOM') {
+      state.status = 'player_left';
+      return;
+    }
+
     if (state.status !== 'playing' && action !== 'PLAY_AGAIN') return;
     
     if (action === 'ROLL') {
@@ -438,9 +430,9 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
       <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center">
           <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
-          <h2 className="text-xl font-bold text-neutral-800 mb-2">Connection Error</h2>
+          <h2 className="text-xl font-bold text-neutral-800 mb-2">连接错误</h2>
           <p className="text-neutral-600 mb-6">{error}</p>
-          <button onClick={onLeave} className="bg-emerald-500 text-white px-6 py-2 rounded-lg font-bold">Go Back</button>
+          <button onClick={onLeave} className="bg-emerald-500 text-white px-6 py-2 rounded-lg font-bold">返回</button>
         </div>
       </div>
     );
@@ -451,7 +443,7 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
       <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 flex items-center justify-center">
         <div className="animate-pulse flex flex-col items-center">
           <Dices className="w-16 h-16 text-emerald-500 mb-4" />
-          <p className="text-emerald-800 font-bold">Connecting to P2P Network...</p>
+          <p className="text-emerald-800 font-bold">正在连接 P2P 网络...</p>
         </div>
       </div>
     );
@@ -471,7 +463,7 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
       <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 flex items-center justify-center p-4">
         <div className="animate-pulse flex flex-col items-center">
           <Dices className="w-16 h-16 text-emerald-500 mb-4" />
-          <p className="text-emerald-800 font-bold">Synchronizing game state...</p>
+          <p className="text-emerald-800 font-bold">正在同步游戏状态...</p>
         </div>
       </div>
     );
@@ -483,20 +475,25 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
   const isActivePlayer = room.playerOrder[room.activePlayerIndex] === myId;
   const activePlayer = room.players[room.playerOrder[room.activePlayerIndex]];
 
+  const handleLeaveClick = () => {
+    dispatchAction('LEAVE_ROOM');
+    setTimeout(onLeave, 200);
+  };
+
   if (room.status === 'waiting' || !activePlayer) {
     return (
       <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 text-neutral-800 flex flex-col items-center justify-center p-4">
         <div className="absolute top-4 right-4">
-          <button onClick={onLeave} className="text-emerald-700 bg-white/50 px-4 py-2 rounded-lg font-bold text-sm hover:bg-white transition-colors">Leave Room</button>
+          <button onClick={handleLeaveClick} className="text-emerald-700 bg-white/50 px-4 py-2 rounded-lg font-bold text-sm hover:bg-white transition-colors">离开房间</button>
         </div>
         <div className="animate-pulse flex flex-col items-center">
           <Dices className="w-20 h-20 text-emerald-500 mb-6 drop-shadow-sm" />
-          <h2 className="text-3xl font-bold mb-4 text-emerald-900">Waiting for opponent...</h2>
+          <h2 className="text-3xl font-bold mb-4 text-emerald-900">等待对手加入...</h2>
           <div className="bg-white/60 border border-emerald-200 px-6 py-3 rounded-2xl flex items-center shadow-sm mb-4">
-            <span className="text-emerald-700 mr-3 font-medium uppercase tracking-wider text-sm">Room Code</span>
+            <span className="text-emerald-700 mr-3 font-medium uppercase tracking-wider text-sm">房间号</span>
             <span className="font-mono text-2xl font-bold text-emerald-900 tracking-widest">{room.id}</span>
           </div>
-          <p className="text-emerald-600/80 text-sm">Share this code with your friend. They must choose "Join Room".</p>
+          <p className="text-emerald-600/80 text-sm">将此房间号分享给好友，让他们选择“加入房间”。</p>
         </div>
       </div>
     );
@@ -508,18 +505,18 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
       <header className="bg-white/60 backdrop-blur-md border-b border-emerald-100 p-4 flex justify-between items-center z-10 shadow-sm">
         <div className="flex items-center">
           <Dices className="w-6 h-6 text-emerald-500 mr-3" />
-          <span className="font-black text-xl tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">Yacht Dice</span>
+          <span className="font-black text-xl tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">快艇骰子</span>
         </div>
         <div className="flex items-center gap-4">
           {!isConnected && (
             <div className="flex items-center text-rose-500 bg-rose-50 px-3 py-1 rounded-full text-xs font-bold border border-rose-200">
-              <WifiOff className="w-3 h-3 mr-1" /> Reconnecting...
+              <WifiOff className="w-3 h-3 mr-1" /> 重新连接中...
             </div>
           )}
           <div className="text-emerald-800 font-bold bg-emerald-100 px-4 py-1.5 rounded-full border border-emerald-200">
-            Round <span className="text-emerald-950 ml-1">{room.currentRound} / 12</span>
+            回合 <span className="text-emerald-950 ml-1">{room.currentRound} / 12</span>
           </div>
-          <button onClick={onLeave} className="text-emerald-700 bg-white/50 px-3 py-1.5 rounded-lg font-bold text-xs hover:bg-white transition-colors border border-emerald-200">Leave</button>
+          <button onClick={handleLeaveClick} className="text-emerald-700 bg-white/50 px-3 py-1.5 rounded-lg font-bold text-xs hover:bg-white transition-colors border border-emerald-200">离开</button>
         </div>
       </header>
 
@@ -534,21 +531,22 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
         {/* Right/Bottom: Table & Dice */}
         <div className="flex-1 flex flex-col items-center justify-center relative p-4 lg:p-8">
           
-          {/* Turn Indicator */}
-          <motion.div 
-            key={activePlayer.id}
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="absolute top-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-md border border-emerald-200 px-8 py-3 rounded-full shadow-lg z-20 flex items-center"
-          >
-            <User className={cn("w-5 h-5 mr-3", isActivePlayer ? "text-emerald-500" : "text-rose-500")} />
-            <span className="font-bold text-lg text-neutral-800">
-              {isActivePlayer ? "Your Turn" : `${activePlayer.name}'s Turn`}
-            </span>
-          </motion.div>
-
-          {/* Dice Area */}
           <div className="flex-1 w-full max-w-3xl flex flex-col items-center justify-center">
+            
+            {/* Turn Indicator (Moved into normal flow to prevent overlapping on mobile) */}
+            <motion.div 
+              key={activePlayer.id}
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white/90 backdrop-blur-md border border-emerald-200 px-6 py-2 rounded-full shadow-md z-20 flex items-center mb-8"
+            >
+              <User className={cn("w-5 h-5 mr-3", isActivePlayer ? "text-emerald-500" : "text-rose-500")} />
+              <span className="font-bold text-lg text-neutral-800">
+                {isActivePlayer ? "你的回合" : `等待 ${activePlayer.name} 操作`}
+              </span>
+            </motion.div>
+
+            {/* Dice Area */}
             <div className="flex flex-wrap justify-center gap-4 sm:gap-6 mb-12 min-h-[120px]">
               <AnimatePresence>
                 {activePlayer.dice.map((face, i) => (
@@ -585,21 +583,21 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
                   >
                     <Dices className="w-6 h-6 mr-3" />
                     {!activePlayer.hasRolled 
-                      ? 'Roll Dice' 
+                      ? '掷骰子' 
                       : activePlayer.rollsLeft > 0 
-                        ? `Reroll (${activePlayer.rollsLeft} left)` 
-                        : 'Select Score'}
+                        ? `重掷 (剩余 ${activePlayer.rollsLeft} 次)` 
+                        : '请选择得分项'}
                   </button>
                   {activePlayer.hasRolled && activePlayer.rollsLeft > 0 && (
                     <p className="text-center text-emerald-700/80 text-sm font-medium">
-                      Select a category on the left to score, or reroll.
+                      在左侧选择一个计分项，或者重新掷骰子。
                     </p>
                   )}
                 </div>
               ) : (
                 <div className="text-emerald-700/80 font-medium text-lg flex items-center">
                   <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping mr-3" />
-                  Waiting for {activePlayer.name} to play...
+                  等待 {activePlayer.name} 操作...
                 </div>
               )}
             </div>
@@ -607,6 +605,34 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
         </div>
 
       </main>
+
+      {/* Player Left Overlay */}
+      <AnimatePresence>
+        {room.status === 'player_left' && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 bg-white/80 backdrop-blur-md flex items-center justify-center p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-white p-10 rounded-[2rem] shadow-2xl max-w-md w-full text-center border border-neutral-200"
+            >
+              <AlertCircle className="w-24 h-24 mx-auto mb-6 text-rose-400 drop-shadow-md" />
+              <h2 className="text-3xl font-black mb-3 text-neutral-800">对局已结束</h2>
+              <p className="text-neutral-500 mb-8">对方已离开房间</p>
+              <button
+                onClick={onLeave}
+                className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-black py-4 px-8 rounded-2xl transition-all text-lg shadow-lg"
+              >
+                返回首页
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Game Over Overlay */}
       <AnimatePresence>
@@ -628,12 +654,12 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
               )} />
               
               <h2 className="text-5xl font-black mb-3 text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">
-                {room.winner === myId ? 'Victory!' : room.winner === 'tie' ? 'Draw!' : 'Defeat!'}
+                {room.winner === myId ? '胜利！' : room.winner === 'tie' ? '平局！' : '失败！'}
               </h2>
               
               <div className="flex justify-center items-center gap-8 my-8">
                 <div className="text-center">
-                  <p className="text-neutral-500 text-sm font-bold uppercase tracking-wider mb-1">You</p>
+                  <p className="text-neutral-500 text-sm font-bold uppercase tracking-wider mb-1">你</p>
                   <p className="text-4xl font-black text-emerald-500">{getTotalScore(me)}</p>
                 </div>
                 <div className="w-px h-12 bg-neutral-200"></div>
@@ -653,7 +679,7 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
                 )}
                 disabled={me.ready}
               >
-                {me.ready ? 'Waiting...' : 'Play Again'}
+                {me.ready ? '等待中...' : '再来一局'}
               </button>
             </motion.div>
           </motion.div>
@@ -721,7 +747,7 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
         
         {/* Table Header */}
         <div className="grid grid-cols-[1fr_80px_80px] bg-emerald-50 border-b border-emerald-200">
-          <div className="py-4 px-4 font-black text-emerald-800 uppercase tracking-widest text-sm">Category</div>
+          <div className="py-4 px-4 font-black text-emerald-800 uppercase tracking-widest text-sm">计分项</div>
           <div className="py-4 flex justify-center items-center border-l border-emerald-200 bg-emerald-100/50">
             <User className="w-5 h-5 text-emerald-600" />
           </div>
@@ -737,8 +763,8 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
           {/* Subtotal & Bonus */}
           <div className="grid grid-cols-[1fr_80px_80px] border-b-2 border-emerald-200 bg-emerald-50/30">
             <div className="py-3 px-4 flex flex-col justify-center">
-              <span className="font-bold text-emerald-800 text-sm">Bonus (&gt;=63)</span>
-              <span className="text-[10px] text-emerald-600 uppercase tracking-wider">+35 Points</span>
+              <span className="font-bold text-emerald-800 text-sm">奖励分 (&gt;=63)</span>
+              <span className="text-[10px] text-emerald-600 uppercase tracking-wider">+35 分</span>
             </div>
             <div className="border-l border-emerald-100 flex items-center justify-center">
               <span className={cn("font-black text-lg", myUpperSum >= 63 ? "text-emerald-600" : "text-neutral-400")}>
@@ -760,7 +786,7 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
 
         {/* Total Score */}
         <div className="grid grid-cols-[1fr_80px_80px] bg-emerald-50 border-t-2 border-emerald-200">
-          <div className="py-5 px-4 font-black text-emerald-900 uppercase tracking-widest text-lg">Total</div>
+          <div className="py-5 px-4 font-black text-emerald-900 uppercase tracking-widest text-lg">总分</div>
           <div className="py-5 flex justify-center items-center border-l border-emerald-200 bg-emerald-100/50">
             <span className="font-black text-2xl text-emerald-600">{getTotalScore(me)}</span>
           </div>
@@ -832,7 +858,7 @@ function Dice({ face, held, hidden, onClick, interactive, index }: {
 
       {held && !hidden && (
         <div className="absolute -top-4 bg-emerald-500 text-white text-xs font-black px-3 py-1 rounded-full uppercase tracking-widest shadow-md flex items-center">
-          <Check className="w-3 h-3 mr-1" /> KEEP
+          <Check className="w-3 h-3 mr-1" /> 保留
         </div>
       )}
     </motion.div>

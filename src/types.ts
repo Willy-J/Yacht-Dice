@@ -19,7 +19,7 @@ export interface RoomState {
   id: string;
   players: Record<string, PlayerState>;
   playerOrder: string[];
-  status: 'waiting' | 'playing' | 'game_over';
+  status: 'waiting' | 'playing' | 'game_over' | 'player_left';
   currentRound: number;
   activePlayerIndex: number;
   winner?: string;
