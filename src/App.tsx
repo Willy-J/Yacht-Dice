@@ -114,7 +114,7 @@ export default function App() {
 
 // --- Join Screen ---
 function JoinScreen({ onJoin }: { onJoin: (data: SessionData) => void }) {
-  const [roomId, setRoomId] = useState('');
+  const [roomId, setRoomId] = useState('8888');
   const [isHost, setIsHost] = useState(true);
 
   const handleJoin = (e: React.FormEvent) => {
@@ -547,84 +547,139 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
       <main className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
         
         {/* Left/Top: Scorecard */}
-        <div className="w-full lg:w-[400px] flex-shrink-0 bg-white/40 border-r border-emerald-100 overflow-y-auto custom-scrollbar">
+        <div className={cn(
+          "flex-shrink-0 bg-white/40 border-r border-emerald-100 overflow-y-auto custom-scrollbar",
+          room.status === 'game_over' ? "w-full lg:w-1/2" : "w-full lg:w-[400px]"
+        )}>
           <Scorecard room={room} myId={myId} opponent={opponent} me={me} isActivePlayer={isActivePlayer} dispatchAction={dispatchAction} />
         </div>
 
-        {/* Right/Bottom: Table & Dice */}
-        <div className="flex-1 flex flex-col items-center justify-center relative p-4 lg:p-8">
-          
-          <div className="flex-1 w-full max-w-3xl flex flex-col items-center justify-center">
-            
-            {/* Turn Indicator (Moved into normal flow to prevent overlapping on mobile) */}
+        {/* Right/Bottom: Table & Dice OR Game Over */}
+        <div className={cn(
+          "flex-1 flex flex-col items-center justify-center relative p-4 lg:p-8",
+          room.status === 'game_over' ? "bg-white/60" : ""
+        )}>
+          {room.status === 'game_over' ? (
             <motion.div 
-              key={activePlayer.id}
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-white/90 backdrop-blur-md border border-emerald-200 px-6 py-2 rounded-full shadow-md z-20 flex items-center mb-8"
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white p-10 rounded-[2rem] shadow-2xl max-w-md w-full text-center border border-neutral-200"
             >
-              <User className={cn("w-5 h-5 mr-3", isActivePlayer ? "text-emerald-500" : "text-rose-500")} />
-              <span className="font-bold text-lg text-neutral-800">
-                {isActivePlayer ? "你的回合" : `等待 ${activePlayer.name} 操作`}
-              </span>
-            </motion.div>
+              <Trophy className={cn(
+                "w-24 h-24 mx-auto mb-6 drop-shadow-md",
+                room.winner === myId ? "text-yellow-400" : room.winner === 'tie' ? "text-neutral-400" : "text-rose-400"
+              )} />
+              
+              <h2 className="text-5xl font-black mb-3 text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">
+                {room.winner === myId ? '胜利！' : room.winner === 'tie' ? '平局！' : '失败！'}
+              </h2>
+              
+              <div className="flex justify-center items-center gap-8 my-8">
+                <div className="text-center">
+                  <p className="text-neutral-500 text-sm font-bold uppercase tracking-wider mb-1">你</p>
+                  <p className="text-4xl font-black text-emerald-500">{getTotalScore(me)}</p>
+                </div>
+                <div className="w-px h-12 bg-neutral-200"></div>
+                <div className="text-center">
+                  <p className="text-neutral-500 text-sm font-bold uppercase tracking-wider mb-1">{opponent?.name}</p>
+                  <p className="text-4xl font-black text-rose-500">{opponent ? getTotalScore(opponent) : 0}</p>
+                </div>
+              </div>
 
-            {/* Dice Area */}
-            <div className="flex flex-wrap justify-center gap-4 sm:gap-6 mb-12 min-h-[120px]">
-              <AnimatePresence>
-                {activePlayer.dice.map((face, i) => (
-                  <Dice 
-                    key={`${activePlayer.id}-${i}-${activePlayer.rollsLeft}`} 
-                    face={face} 
-                    held={activePlayer.held[i]} 
-                    hidden={!activePlayer.hasRolled}
-                    onClick={() => {
-                      if (isActivePlayer && activePlayer.hasRolled && activePlayer.rollsLeft > 0) {
-                        dispatchAction('TOGGLE_HOLD', i);
-                      }
-                    }}
-                    interactive={isActivePlayer && activePlayer.hasRolled && activePlayer.rollsLeft > 0}
-                    index={i}
-                  />
-                ))}
-              </AnimatePresence>
-            </div>
-
-            {/* Controls */}
-            <div className="h-24 flex items-center justify-center w-full max-w-sm">
-              {isActivePlayer ? (
-                <div className="w-full flex flex-col gap-3">
-                  <button
-                    onClick={() => dispatchAction('ROLL')}
-                    disabled={activePlayer.rollsLeft === 0 || !isConnected}
-                    className={cn(
-                      "w-full font-black py-4 px-8 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center text-xl uppercase tracking-wider",
-                      activePlayer.rollsLeft > 0 && isConnected
-                        ? "bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-white shadow-emerald-500/30"
-                        : "bg-neutral-200 text-neutral-400 cursor-not-allowed border border-neutral-300"
-                    )}
-                  >
-                    <Dices className="w-6 h-6 mr-3" />
-                    {!activePlayer.hasRolled 
-                      ? '掷骰子' 
-                      : activePlayer.rollsLeft > 0 
-                        ? `重掷 (剩余 ${activePlayer.rollsLeft} 次)` 
-                        : '请选择得分项'}
-                  </button>
-                  {activePlayer.hasRolled && activePlayer.rollsLeft > 0 && (
-                    <p className="text-center text-emerald-700/80 text-sm font-medium">
-                      在左侧选择一个计分项，或者重新掷骰子。
-                    </p>
+              <div className="space-y-3">
+                <button
+                  onClick={() => dispatchAction('PLAY_AGAIN')}
+                  className={cn(
+                    "w-full font-black py-4 px-8 rounded-2xl transition-all text-lg uppercase tracking-wider shadow-lg",
+                    me.ready 
+                      ? "bg-neutral-200 text-neutral-400 cursor-not-allowed border border-neutral-300"
+                      : "bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-white shadow-emerald-500/30 active:scale-95"
                   )}
-                </div>
-              ) : (
-                <div className="text-emerald-700/80 font-medium text-lg flex items-center">
-                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping mr-3" />
-                  等待 {activePlayer.name} 操作...
-                </div>
-              )}
+                  disabled={me.ready}
+                >
+                  {me.ready ? '等待中...' : '再来一局'}
+                </button>
+                <button
+                  onClick={handleLeaveClick}
+                  className="w-full font-black py-4 px-8 rounded-2xl transition-all text-lg uppercase tracking-wider bg-white border-2 border-rose-200 text-rose-500 hover:bg-rose-50 hover:border-rose-300 active:scale-95"
+                >
+                  离开房间
+                </button>
+              </div>
+            </motion.div>
+          ) : (
+            <div className="flex-1 w-full max-w-3xl flex flex-col items-center justify-center">
+              
+              {/* Turn Indicator */}
+              <motion.div 
+                key={activePlayer.id}
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white/90 backdrop-blur-md border border-emerald-200 px-6 py-2 rounded-full shadow-md z-20 flex items-center mb-8"
+              >
+                <User className={cn("w-5 h-5 mr-3", isActivePlayer ? "text-emerald-500" : "text-rose-500")} />
+                <span className="font-bold text-lg text-neutral-800">
+                  {isActivePlayer ? "你的回合" : `等待 ${activePlayer.name} 操作`}
+                </span>
+              </motion.div>
+
+              {/* Dice Area */}
+              <div className="flex flex-wrap justify-center gap-4 sm:gap-6 mb-12 min-h-[120px]">
+                <AnimatePresence>
+                  {activePlayer.dice.map((face, i) => (
+                    <Dice 
+                      key={`${activePlayer.id}-${i}-${activePlayer.rollsLeft}`} 
+                      face={face} 
+                      held={activePlayer.held[i]} 
+                      hidden={!activePlayer.hasRolled}
+                      onClick={() => {
+                        if (isActivePlayer && activePlayer.hasRolled && activePlayer.rollsLeft > 0) {
+                          dispatchAction('TOGGLE_HOLD', i);
+                        }
+                      }}
+                      interactive={isActivePlayer && activePlayer.hasRolled && activePlayer.rollsLeft > 0}
+                      index={i}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
+
+              {/* Controls */}
+              <div className="h-24 flex items-center justify-center w-full max-w-sm">
+                {isActivePlayer ? (
+                  <div className="w-full flex flex-col gap-3">
+                    <button
+                      onClick={() => dispatchAction('ROLL')}
+                      disabled={activePlayer.rollsLeft === 0 || !isConnected}
+                      className={cn(
+                        "w-full font-black py-4 px-8 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center text-xl uppercase tracking-wider",
+                        activePlayer.rollsLeft > 0 && isConnected
+                          ? "bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-white shadow-emerald-500/30"
+                          : "bg-neutral-200 text-neutral-400 cursor-not-allowed border border-neutral-300"
+                      )}
+                    >
+                      <Dices className="w-6 h-6 mr-3" />
+                      {!activePlayer.hasRolled 
+                        ? '掷骰子' 
+                        : activePlayer.rollsLeft > 0 
+                          ? `重掷 (剩余 ${activePlayer.rollsLeft} 次)` 
+                          : '请选择得分项'}
+                    </button>
+                    {activePlayer.hasRolled && activePlayer.rollsLeft > 0 && (
+                      <p className="text-center text-emerald-700/80 text-sm font-medium">
+                        在左侧选择一个计分项，或者重新掷骰子。
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-emerald-700/80 font-medium text-lg flex items-center">
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping mr-3" />
+                    等待 {activePlayer.name} 操作...
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
       </main>
@@ -656,58 +711,6 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Game Over Overlay */}
-      <AnimatePresence>
-        {room.status === 'game_over' && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-50 bg-white/80 backdrop-blur-md flex items-center justify-center p-4"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-white p-10 rounded-[2rem] shadow-2xl max-w-md w-full text-center border border-neutral-200"
-            >
-              <Trophy className={cn(
-                "w-24 h-24 mx-auto mb-6 drop-shadow-md",
-                room.winner === myId ? "text-yellow-400" : room.winner === 'tie' ? "text-neutral-400" : "text-rose-400"
-              )} />
-              
-              <h2 className="text-5xl font-black mb-3 text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">
-                {room.winner === myId ? '胜利！' : room.winner === 'tie' ? '平局！' : '失败！'}
-              </h2>
-              
-              <div className="flex justify-center items-center gap-8 my-8">
-                <div className="text-center">
-                  <p className="text-neutral-500 text-sm font-bold uppercase tracking-wider mb-1">你</p>
-                  <p className="text-4xl font-black text-emerald-500">{getTotalScore(me)}</p>
-                </div>
-                <div className="w-px h-12 bg-neutral-200"></div>
-                <div className="text-center">
-                  <p className="text-neutral-500 text-sm font-bold uppercase tracking-wider mb-1">{opponent?.name}</p>
-                  <p className="text-4xl font-black text-rose-500">{opponent ? getTotalScore(opponent) : 0}</p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => dispatchAction('PLAY_AGAIN')}
-                className={cn(
-                  "w-full font-black py-5 px-8 rounded-2xl transition-all text-xl uppercase tracking-wider shadow-lg",
-                  me.ready 
-                    ? "bg-neutral-200 text-neutral-400 cursor-not-allowed border border-neutral-300"
-                    : "bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-white shadow-emerald-500/30 active:scale-95"
-                )}
-                disabled={me.ready}
-              >
-                {me.ready ? '等待中...' : '再来一局'}
-              </button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
@@ -732,7 +735,7 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
         <div 
           className={cn(
             "border-l border-emerald-100 flex items-center justify-center relative",
-            canScore ? "cursor-pointer hover:bg-emerald-100" : ""
+            canScore ? "cursor-pointer hover:bg-amber-50" : ""
           )}
           onClick={() => {
             if (canScore) {
@@ -741,9 +744,9 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
           }}
         >
           {myScore !== undefined ? (
-            <span className="font-black text-lg text-emerald-600">{myScore}</span>
+            <span className="font-black text-xl text-emerald-800">{myScore}</span>
           ) : canScore ? (
-            <span className="font-bold text-lg text-emerald-400 group-hover:text-emerald-600 transition-colors">{potentialScore}</span>
+            <span className="font-bold text-lg text-amber-500 bg-amber-100/50 px-2 py-0.5 rounded border border-amber-200 group-hover:bg-amber-200 transition-colors">{potentialScore}</span>
           ) : (
             <span className="text-neutral-300">-</span>
           )}
@@ -752,7 +755,7 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
         {/* Opponent Score Column */}
         <div className="border-l border-emerald-100 flex items-center justify-center bg-neutral-50/50">
           {oppScore !== undefined ? (
-            <span className="font-black text-lg text-rose-500">{oppScore}</span>
+            <span className="font-black text-xl text-rose-600">{oppScore}</span>
           ) : (
             <span className="text-neutral-300">-</span>
           )}
