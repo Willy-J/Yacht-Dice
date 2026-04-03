@@ -302,7 +302,7 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
 
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id') {
-        setError('该房间号已被占用，请尝试其他房间号。');
+        setError('创建失败：该房间号已被其他人占用，请换一个房间号。');
       } else {
         setError(`连接错误: ${err.message}`);
       }
@@ -319,7 +319,11 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
     });
 
     peer.on('error', (err) => {
-      setError(`连接错误: ${err.message}`);
+      if (err.type === 'peer-unavailable') {
+        setError('加入失败：房间不存在！请检查房间号，或等待房主创建后再加入。');
+      } else {
+        setError(`连接错误: ${err.message}`);
+      }
       setIsConnected(false);
     });
   };
@@ -724,6 +728,10 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
     const canScore = isActivePlayer && me.hasRolled && myScore === undefined;
     const potentialScore = canScore ? calculatePotentialScore(me.dice, cat.id) : null;
 
+    const oppIsActive = !isActivePlayer && opponent && room.playerOrder[room.activePlayerIndex] === opponent.id;
+    const oppCanScore = oppIsActive && opponent?.hasRolled && oppScore === undefined;
+    const oppPotentialScore = oppCanScore && opponent ? calculatePotentialScore(opponent.dice, cat.id) : null;
+
     return (
       <div key={cat.id} className="grid grid-cols-[1fr_80px_80px] border-b border-emerald-100 hover:bg-emerald-50/50 transition-colors group">
         <div className="py-3 px-4 flex flex-col justify-center">
@@ -756,6 +764,8 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
         <div className="border-l border-emerald-100 flex items-center justify-center bg-neutral-50/50">
           {oppScore !== undefined ? (
             <span className="font-black text-xl text-rose-600">{oppScore}</span>
+          ) : oppCanScore ? (
+            <span className="font-bold text-lg text-rose-300">{oppPotentialScore}</span>
           ) : (
             <span className="text-neutral-300">-</span>
           )}
