@@ -1,6 +1,6 @@
 export type DiceFace = 1 | 2 | 3 | 4 | 5 | 6;
 
-export type ScoreCategory = 
+export type ScoreCategory =
   | 'ones' | 'twos' | 'threes' | 'fours' | 'fives' | 'sixes'
   | 'choice' | 'fourOfAKind' | 'fullHouse' | 'smallStraight' | 'largeStraight' | 'yacht';
 
@@ -13,6 +13,7 @@ export interface PlayerState {
   scores: Partial<Record<ScoreCategory, number>>;
   ready: boolean;
   hasRolled: boolean;
+  connected?: boolean;
 }
 
 export interface RoomState {

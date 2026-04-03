@@ -6,6 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+*.py
+docker/
+.env.local
+__pycache__/
 
 # wrangler files
 .wrangler

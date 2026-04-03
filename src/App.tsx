@@ -1,5 +1,6 @@
+/// <reference types="vite/client" />
 import React, { useEffect, useState, useRef } from 'react';
-import Peer, { DataConnection } from 'peerjs';
+import { io, Socket } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
 import { RoomState, PlayerState, DiceFace, ScoreCategory, CATEGORIES } from './types';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -97,7 +98,7 @@ function clearSession() {
 // --- Main App ---
 export default function App() {
   const [session, setSessionState] = useState<SessionData | null>(getSession());
-  
+
   if (!session) {
     return <JoinScreen onJoin={(data) => {
       setSession(data);
@@ -120,8 +121,8 @@ function JoinScreen({ onJoin }: { onJoin: (data: SessionData) => void }) {
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
     if (!roomId.trim()) return;
-    
-    const myId = isHost ? `host-${uuidv4().slice(0,8)}` : `guest-${uuidv4().slice(0,8)}`;
+
+    const myId = isHost ? `host-${uuidv4().slice(0, 8)}` : `guest-${uuidv4().slice(0, 8)}`;
     onJoin({
       roomId: roomId.toUpperCase(),
       playerName: isHost ? '房主' : '访客',
@@ -136,17 +137,17 @@ function JoinScreen({ onJoin }: { onJoin: (data: SessionData) => void }) {
         <div className="flex flex-col items-center justify-center mb-8">
           <Dices className="w-16 h-16 text-emerald-500 mb-4 drop-shadow-sm" />
           <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">快艇骰子</h1>
-          <p className="text-emerald-600/80 mt-2 font-medium">P2P 联机对战</p>
+          <p className="text-emerald-600/80 mt-2 font-medium">在线联机对战</p>
         </div>
-        
+
         <div className="flex gap-2 mb-6 bg-emerald-100/50 p-1 rounded-xl">
-          <button 
+          <button
             onClick={() => setIsHost(true)}
             className={cn("flex-1 py-2 rounded-lg font-bold text-sm transition-all", isHost ? "bg-white text-emerald-700 shadow-sm" : "text-emerald-600/60 hover:text-emerald-700")}
           >
             创建房间
           </button>
-          <button 
+          <button
             onClick={() => setIsHost(false)}
             className={cn("flex-1 py-2 rounded-lg font-bold text-sm transition-all", !isHost ? "bg-white text-emerald-700 shadow-sm" : "text-emerald-600/60 hover:text-emerald-700")}
           >
@@ -180,275 +181,71 @@ function JoinScreen({ onJoin }: { onJoin: (data: SessionData) => void }) {
   );
 }
 
-// --- Game Container (P2P Logic) ---
+// --- Game Container (Client-Server Logic) ---
 function GameContainer({ session, onLeave }: { session: SessionData, onLeave: () => void }) {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [error, setError] = useState('');
   const [isConnected, setIsConnected] = useState(false);
-  
-  const peerRef = useRef<Peer | null>(null);
-  const connRef = useRef<DataConnection | null>(null);
-  const connectionsRef = useRef<Set<DataConnection>>(new Set());
-  const gameStateRef = useRef<RoomState | null>(null);
-
-  const hostPeerId = `yacht-room-${session.roomId}`;
-  const LOCAL_STORAGE_KEY = `YACHT_STATE_${session.roomId}`;
+  const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
-    if (session.role === 'host') {
-      initHost();
-    } else {
-      initGuest();
-    }
+    let socket: Socket | null = null;
+    let timeout: NodeJS.Timeout;
+
+    const connectSocket = () => {
+      const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+      socket = io(BACKEND_URL, {
+        transports: ['websocket', 'polling'] // 恢复标准的双协议支持
+      });
+      socketRef.current = socket;
+
+      socket.on('connect', () => {
+        setIsConnected(true);
+        setError('');
+        socket?.emit('join_yacht', {
+          roomId: session.roomId,
+          id: session.myId,
+          name: session.playerName,
+          role: session.role
+        });
+      });
+
+      socket.on('disconnect', () => {
+        setIsConnected(false);
+      });
+
+      socket.on('state_update', (state: RoomState) => {
+        setRoom(state);
+      });
+
+      socket.on('error', (msg: string) => {
+        setError(msg);
+      });
+    };
+
+    // 延迟避免 React StrictMode 引发的连续挂载/卸载立刻建立并销毁连接
+    timeout = setTimeout(connectSocket, 200);
 
     return () => {
-      peerRef.current?.destroy();
+      clearTimeout(timeout);
+      if (socket) {
+        socket.disconnect();
+      }
     };
-  }, []);
+  }, [session]);
 
-  // --- HOST LOGIC ---
-  const initHost = () => {
-    const peer = new Peer(hostPeerId);
-    peerRef.current = peer;
-
-    // Load or create state
-    let state: RoomState;
-    const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (saved) {
-      state = JSON.parse(saved);
-      if (state.status === 'player_left') {
-        state = {
-          id: session.roomId,
-          players: { [session.myId]: createPlayer(session.myId, session.playerName) },
-          playerOrder: [session.myId],
-          status: 'waiting',
-          currentRound: 1,
-          activePlayerIndex: 0
-        };
-      } else {
-        // Ensure host is in the room if restoring
-        if (!state.players[session.myId]) {
-          state.players[session.myId] = createPlayer(session.myId, session.playerName);
-          if (!state.playerOrder.includes(session.myId)) {
-            state.playerOrder.unshift(session.myId);
-          }
-        }
-      }
-    } else {
-      state = {
-        id: session.roomId,
-        players: { [session.myId]: createPlayer(session.myId, session.playerName) },
-        playerOrder: [session.myId],
-        status: 'waiting',
-        currentRound: 1,
-        activePlayerIndex: 0
-      };
-    }
-    
-    gameStateRef.current = state;
-    setRoom(state);
-    setIsConnected(true);
-
-    const broadcast = (newState: RoomState) => {
-      gameStateRef.current = newState;
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newState));
-      setRoom({...newState});
-      connectionsRef.current.forEach(c => {
-        if (c.open) c.send({ type: 'STATE', payload: newState });
-      });
-    };
-
-    peer.on('connection', (conn) => {
-      connectionsRef.current.add(conn);
-      
-      conn.on('open', () => {
-        // Send current state immediately
-        if (gameStateRef.current) {
-          conn.send({ type: 'STATE', payload: gameStateRef.current });
-        }
-      });
-
-      conn.on('data', (data: any) => {
-        const currentState = gameStateRef.current;
-        if (!currentState) return;
-
-        if (data.type === 'JOIN') {
-          const newState = JSON.parse(JSON.stringify(currentState));
-          const { id, name } = data.payload;
-          if (!newState.players[id]) {
-            if (newState.playerOrder.length < 2) {
-              newState.players[id] = createPlayer(id, name);
-              newState.playerOrder.push(id);
-              if (newState.playerOrder.length === 2 && newState.status === 'waiting') {
-                newState.status = 'playing';
-              }
-            }
-          } else {
-            newState.players[id].name = name; // Update name on reconnect
-          }
-          broadcast(newState);
-        } 
-        else if (data.type === 'ACTION') {
-          const newState = JSON.parse(JSON.stringify(currentState));
-          handleGameAction(newState, data.payload.action, data.payload.playerId, data.payload.value);
-          broadcast(newState);
-        }
-      });
-
-      conn.on('close', () => {
-        connectionsRef.current.delete(conn);
-      });
-    });
-
-    peer.on('error', (err) => {
-      if (err.type === 'unavailable-id') {
-        setError('创建失败：该房间号已被其他人占用，请换一个房间号。');
-      } else {
-        setError(`连接错误: ${err.message}`);
-      }
-    });
-  };
-
-  // --- GUEST LOGIC ---
-  const initGuest = () => {
-    const peer = new Peer(session.myId);
-    peerRef.current = peer;
-
-    peer.on('open', () => {
-      connectToHost(peer);
-    });
-
-    peer.on('error', (err) => {
-      if (err.type === 'peer-unavailable') {
-        setError('加入失败：房间不存在！请检查房间号，或等待房主创建后再加入。');
-      } else {
-        setError(`连接错误: ${err.message}`);
-      }
-      setIsConnected(false);
-    });
-  };
-
-  const connectToHost = (peer: Peer) => {
-    const conn = peer.connect(hostPeerId, { reliable: true });
-    connRef.current = conn;
-
-    conn.on('open', () => {
-      setIsConnected(true);
-      setError('');
-      conn.send({ type: 'JOIN', payload: { id: session.myId, name: session.playerName } });
-    });
-
-    conn.on('data', (data: any) => {
-      if (data.type === 'STATE') {
-        setRoom(data.payload);
-      }
-    });
-
-    conn.on('close', () => {
-      setIsConnected(false);
-      // Auto reconnect
-      setTimeout(() => {
-        if (peerRef.current && !peerRef.current.destroyed) {
-          connectToHost(peerRef.current);
-        }
-      }, 3000);
-    });
-  };
-
-  // --- Game Actions (Host executes these) ---
-  const handleGameAction = (state: RoomState, action: string, playerId: string, value?: any) => {
-    if (action === 'LEAVE_ROOM') {
-      state.status = 'player_left';
-      return;
-    }
-
-    if (state.status !== 'playing' && action !== 'PLAY_AGAIN') return;
-    
-    if (action === 'ROLL') {
-      const player = state.players[playerId];
-      if (!player || player.rollsLeft <= 0) return;
-      player.dice = player.dice.map((d, i) => player.held[i] ? d : Math.floor(Math.random() * 6) + 1 as DiceFace);
-      player.rollsLeft--;
-      player.hasRolled = true;
-    } 
-    else if (action === 'TOGGLE_HOLD') {
-      const player = state.players[playerId];
-      if (!player || !player.hasRolled || player.rollsLeft <= 0) return;
-      player.held[value] = !player.held[value];
-    }
-    else if (action === 'SCORE') {
-      const player = state.players[playerId];
-      const category = value as ScoreCategory;
-      if (!player || !player.hasRolled || player.scores[category] !== undefined) return;
-      
-      player.scores[category] = calculatePotentialScore(player.dice, category);
-      
-      // Reset turn
-      player.dice = [1,1,1,1,1];
-      player.held = [false,false,false,false,false];
-      player.rollsLeft = 3;
-      player.hasRolled = false;
-      
-      // Next turn
-      state.activePlayerIndex = (state.activePlayerIndex + 1) % state.playerOrder.length;
-      
-      // Check round end
-      if (state.activePlayerIndex === 0) {
-        state.currentRound++;
-        if (state.currentRound > 12) {
-          state.status = 'game_over';
-          const p1 = state.players[state.playerOrder[0]];
-          const p2 = state.players[state.playerOrder[1]];
-          const s1 = getTotalScore(p1);
-          const s2 = getTotalScore(p2);
-          if (s1 > s2) state.winner = p1.id;
-          else if (s2 > s1) state.winner = p2.id;
-          else state.winner = 'tie';
-        }
-      }
-    }
-    else if (action === 'PLAY_AGAIN') {
-      const player = state.players[playerId];
-      if (!player) return;
-      player.ready = true;
-      
-      const allReady = state.playerOrder.every(id => state.players[id].ready);
-      if (allReady) {
-        state.status = 'playing';
-        state.currentRound = 1;
-        state.activePlayerIndex = 0;
-        state.winner = undefined;
-        state.playerOrder.forEach(id => {
-          const p = state.players[id];
-          p.scores = {};
-          p.ready = false;
-          p.dice = [1,1,1,1,1];
-          p.held = [false,false,false,false,false];
-          p.rollsLeft = 3;
-          p.hasRolled = false;
-        });
-      }
-    }
-  };
-
-  // --- Dispatch Action ---
   const dispatchAction = (action: string, value?: any) => {
-    if (session.role === 'host') {
-      if (gameStateRef.current) {
-        const newState = JSON.parse(JSON.stringify(gameStateRef.current)); // deep copy
-        handleGameAction(newState, action, session.myId, value);
-        
-        gameStateRef.current = newState;
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newState));
-        setRoom(newState);
-        connectionsRef.current.forEach(c => {
-          if (c.open) c.send({ type: 'STATE', payload: newState });
-        });
+    if (socketRef.current?.connected) {
+      if (action === 'LEAVE_ROOM') {
+        socketRef.current.emit('action', { roomId: session.roomId, playerId: session.myId, action });
+        return;
       }
-    } else {
-      if (connRef.current?.open) {
-        connRef.current.send({ type: 'ACTION', payload: { action, playerId: session.myId, value } });
-      }
+      socketRef.current.emit('action', {
+        roomId: session.roomId,
+        playerId: session.myId,
+        action,
+        value
+      });
     }
   };
 
@@ -470,7 +267,7 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
       <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 flex items-center justify-center">
         <div className="animate-pulse flex flex-col items-center">
           <Dices className="w-16 h-16 text-emerald-500 mb-4" />
-          <p className="text-emerald-800 font-bold">正在连接 P2P 网络...</p>
+          <p className="text-emerald-800 font-bold">正在连接服务器...</p>
         </div>
       </div>
     );
@@ -527,7 +324,7 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 text-neutral-800 flex flex-col font-sans overflow-hidden">
+    <div className="h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 text-neutral-800 flex flex-col font-sans overflow-hidden">
       {/* Header */}
       <header className="bg-white/60 backdrop-blur-md border-b border-emerald-100 p-4 flex justify-between items-center z-10 shadow-sm">
         <div className="flex items-center">
@@ -549,7 +346,7 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
 
       {/* Main Game Area */}
       <main className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
-        
+
         {/* Left/Top: Scorecard */}
         <div className={cn(
           "flex-shrink-0 bg-white/40 border-r border-emerald-100 overflow-y-auto custom-scrollbar",
@@ -564,7 +361,7 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
           room.status === 'game_over' ? "bg-white/60" : ""
         )}>
           {room.status === 'game_over' ? (
-            <motion.div 
+            <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               className="bg-white p-10 rounded-[2rem] shadow-2xl max-w-md w-full text-center border border-neutral-200"
@@ -573,11 +370,11 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
                 "w-24 h-24 mx-auto mb-6 drop-shadow-md",
                 room.winner === myId ? "text-yellow-400" : room.winner === 'tie' ? "text-neutral-400" : "text-rose-400"
               )} />
-              
+
               <h2 className="text-5xl font-black mb-3 text-transparent bg-clip-text bg-gradient-to-br from-emerald-600 to-teal-800">
                 {room.winner === myId ? '胜利！' : room.winner === 'tie' ? '平局！' : '失败！'}
               </h2>
-              
+
               <div className="flex justify-center items-center gap-8 my-8">
                 <div className="text-center">
                   <p className="text-neutral-500 text-sm font-bold uppercase tracking-wider mb-1">你</p>
@@ -595,7 +392,7 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
                   onClick={() => dispatchAction('PLAY_AGAIN')}
                   className={cn(
                     "w-full font-black py-4 px-8 rounded-2xl transition-all text-lg uppercase tracking-wider shadow-lg",
-                    me.ready 
+                    me.ready
                       ? "bg-neutral-200 text-neutral-400 cursor-not-allowed border border-neutral-300"
                       : "bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-500 hover:to-emerald-700 text-white shadow-emerald-500/30 active:scale-95"
                   )}
@@ -613,9 +410,9 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
             </motion.div>
           ) : (
             <div className="flex-1 w-full max-w-3xl flex flex-col items-center justify-center">
-              
+
               {/* Turn Indicator */}
-              <motion.div 
+              <motion.div
                 key={activePlayer.id}
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -631,10 +428,10 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
               <div className="flex flex-wrap justify-center gap-4 sm:gap-6 mb-12 min-h-[120px]">
                 <AnimatePresence>
                   {activePlayer.dice.map((face, i) => (
-                    <Dice 
-                      key={`${activePlayer.id}-${i}-${activePlayer.rollsLeft}`} 
-                      face={face} 
-                      held={activePlayer.held[i]} 
+                    <Dice
+                      key={`${activePlayer.id}-${i}-${activePlayer.rollsLeft}`}
+                      face={face}
+                      held={activePlayer.held[i]}
                       hidden={!activePlayer.hasRolled}
                       onClick={() => {
                         if (isActivePlayer && activePlayer.hasRolled && activePlayer.rollsLeft > 0) {
@@ -663,10 +460,10 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
                       )}
                     >
                       <Dices className="w-6 h-6 mr-3" />
-                      {!activePlayer.hasRolled 
-                        ? '掷骰子' 
-                        : activePlayer.rollsLeft > 0 
-                          ? `重掷 (剩余 ${activePlayer.rollsLeft} 次)` 
+                      {!activePlayer.hasRolled
+                        ? '掷骰子'
+                        : activePlayer.rollsLeft > 0
+                          ? `重掷 (剩余 ${activePlayer.rollsLeft} 次)`
                           : '请选择得分项'}
                     </button>
                     {activePlayer.hasRolled && activePlayer.rollsLeft > 0 && (
@@ -691,13 +488,13 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
       {/* Player Left Overlay */}
       <AnimatePresence>
         {room.status === 'player_left' && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="absolute inset-0 z-50 bg-white/80 backdrop-blur-md flex items-center justify-center p-4"
           >
-            <motion.div 
+            <motion.div
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               className="bg-white p-10 rounded-[2rem] shadow-2xl max-w-md w-full text-center border border-neutral-200"
@@ -720,11 +517,11 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
 }
 
 function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }: { room: RoomState, myId: string, opponent: PlayerState | null, me: PlayerState, isActivePlayer: boolean, dispatchAction: (action: string, val?: any) => void }) {
-  
+
   const renderRow = (cat: typeof CATEGORIES[0]) => {
     const myScore = me.scores[cat.id];
     const oppScore = opponent?.scores[cat.id];
-    
+
     const canScore = isActivePlayer && me.hasRolled && myScore === undefined;
     const potentialScore = canScore ? calculatePotentialScore(me.dice, cat.id) : null;
 
@@ -733,14 +530,14 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
     const oppPotentialScore = oppCanScore && opponent ? calculatePotentialScore(opponent.dice, cat.id) : null;
 
     return (
-      <div key={cat.id} className="grid grid-cols-[1fr_80px_80px] border-b border-emerald-100 hover:bg-emerald-50/50 transition-colors group">
-        <div className="py-3 px-4 flex flex-col justify-center">
+      <div key={cat.id} className="grid grid-cols-[1fr_80px_80px] border-b border-emerald-100 hover:bg-emerald-50/50 transition-colors group flex-1">
+        <div className="py-1.5 px-3 lg:px-4 flex flex-col justify-center">
           <span className="font-bold text-neutral-800 text-sm">{cat.name}</span>
           <span className="text-[10px] text-neutral-500 uppercase tracking-wider">{cat.description}</span>
         </div>
-        
+
         {/* My Score Column */}
-        <div 
+        <div
           className={cn(
             "border-l border-emerald-100 flex items-center justify-center relative",
             canScore ? "cursor-pointer hover:bg-amber-50" : ""
@@ -778,27 +575,27 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
   const oppUpperSum = opponent ? getUpperSum(opponent) : 0;
 
   return (
-    <div className="p-4 lg:p-6 pb-24 lg:pb-6">
-      <div className="bg-white rounded-2xl border border-emerald-200 shadow-xl overflow-hidden">
-        
+    <div className="p-4 lg:p-6 pb-24 lg:pb-6 h-full">
+      <div className="bg-white rounded-2xl border border-emerald-200 shadow-xl overflow-hidden h-full flex flex-col">
+
         {/* Table Header */}
-        <div className="grid grid-cols-[1fr_80px_80px] bg-emerald-50 border-b border-emerald-200">
-          <div className="py-4 px-4 font-black text-emerald-800 uppercase tracking-widest text-sm">计分项</div>
-          <div className="py-4 flex justify-center items-center border-l border-emerald-200 bg-emerald-100/50">
+        <div className="grid grid-cols-[1fr_80px_80px] bg-emerald-50 border-b border-emerald-200 shrink-0">
+          <div className="py-2 px-4 font-black text-emerald-800 uppercase tracking-widest text-sm">计分项</div>
+          <div className="py-2 flex justify-center items-center border-l border-emerald-200 bg-emerald-100/50">
             <User className="w-5 h-5 text-emerald-600" />
           </div>
-          <div className="py-4 flex justify-center items-center border-l border-emerald-200 bg-rose-50">
+          <div className="py-2 flex justify-center items-center border-l border-emerald-200 bg-rose-50">
             <User className="w-5 h-5 text-rose-500" />
           </div>
         </div>
 
         {/* Upper Section */}
-        <div className="bg-white">
+        <div className="bg-white flex flex-col flex-1 min-h-0">
           {CATEGORIES.slice(0, 6).map(renderRow)}
-          
+
           {/* Subtotal & Bonus */}
-          <div className="grid grid-cols-[1fr_80px_80px] border-b-2 border-emerald-200 bg-emerald-50/30">
-            <div className="py-3 px-4 flex flex-col justify-center">
+          <div className="grid grid-cols-[1fr_80px_80px] border-b-2 border-emerald-200 bg-emerald-50/30 shrink-0">
+            <div className="py-1.5 px-4 flex flex-col justify-center">
               <span className="font-bold text-emerald-800 text-sm">奖励分 (&gt;=63)</span>
               <span className="text-[10px] text-emerald-600 uppercase tracking-wider">+35 分</span>
             </div>
@@ -816,17 +613,17 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
         </div>
 
         {/* Lower Section */}
-        <div className="bg-white">
+        <div className="bg-white flex flex-col flex-1 min-h-0">
           {CATEGORIES.slice(6).map(renderRow)}
         </div>
 
         {/* Total Score */}
-        <div className="grid grid-cols-[1fr_80px_80px] bg-emerald-50 border-t-2 border-emerald-200">
-          <div className="py-5 px-4 font-black text-emerald-900 uppercase tracking-widest text-lg">总分</div>
-          <div className="py-5 flex justify-center items-center border-l border-emerald-200 bg-emerald-100/50">
+        <div className="grid grid-cols-[1fr_80px_80px] bg-emerald-50 border-t-2 border-emerald-200 shrink-0">
+          <div className="py-3 px-4 font-black text-emerald-900 uppercase tracking-widest text-lg">总分</div>
+          <div className="py-3 flex justify-center items-center border-l border-emerald-200 bg-emerald-100/50">
             <span className="font-black text-2xl text-emerald-600">{getTotalScore(me)}</span>
           </div>
-          <div className="py-5 flex justify-center items-center border-l border-emerald-200 bg-rose-50">
+          <div className="py-3 flex justify-center items-center border-l border-emerald-200 bg-rose-50">
             <span className="font-black text-2xl text-rose-500">{opponent ? getTotalScore(opponent) : 0}</span>
           </div>
         </div>
@@ -836,16 +633,16 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
   );
 }
 
-function Dice({ face, held, hidden, onClick, interactive, index }: { 
+function Dice({ face, held, hidden, onClick, interactive, index }: {
   key?: React.Key;
-  face: DiceFace; 
-  held: boolean; 
+  face: DiceFace;
+  held: boolean;
   hidden?: boolean;
   onClick?: () => void;
   interactive?: boolean;
   index: number;
 }) {
-  
+
   // Pip layouts for 1-6
   const pips = {
     1: ['col-start-2 row-start-2'],
@@ -861,15 +658,15 @@ function Dice({ face, held, hidden, onClick, interactive, index }: {
       layout
       onClick={onClick}
       initial={{ opacity: 0, scale: 0.5, rotate: -180 }}
-      animate={{ 
-        opacity: 1, 
+      animate={{
+        opacity: 1,
         scale: held ? 0.9 : 1,
         y: held ? 15 : 0,
         rotate: hidden ? 0 : (Math.random() * 10 - 5) // Slight random rotation for realism
       }}
-      transition={{ 
-        type: "spring", 
-        stiffness: 400, 
+      transition={{
+        type: "spring",
+        stiffness: 400,
         damping: 25,
         delay: index * 0.05 // Stagger entrance
       }}
@@ -887,7 +684,7 @@ function Dice({ face, held, hidden, onClick, interactive, index }: {
           ))}
         </div>
       )}
-      
+
       {hidden && (
         <Dices className="w-8 h-8 sm:w-10 sm:h-10 text-neutral-400" />
       )}
