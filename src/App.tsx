@@ -106,6 +106,7 @@ export default function App() {
   }
 
   return <GameContainer session={session} onLeave={() => {
+    localStorage.removeItem(`YACHT_STATE_${session.roomId}`);
     clearSession();
     setSessionState(null);
   }} />;
@@ -188,6 +189,7 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
   const connectionsRef = useRef<Set<DataConnection>>(new Set());
+  const gameStateRef = useRef<RoomState | null>(null);
 
   const hostPeerId = `yacht-room-${session.roomId}`;
   const LOCAL_STORAGE_KEY = `YACHT_STATE_${session.roomId}`;
@@ -214,11 +216,22 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
     const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (saved) {
       state = JSON.parse(saved);
-      // Ensure host is in the room if restoring
-      if (!state.players[session.myId]) {
-        state.players[session.myId] = createPlayer(session.myId, session.playerName);
-        if (!state.playerOrder.includes(session.myId)) {
-          state.playerOrder.unshift(session.myId);
+      if (state.status === 'player_left') {
+        state = {
+          id: session.roomId,
+          players: { [session.myId]: createPlayer(session.myId, session.playerName) },
+          playerOrder: [session.myId],
+          status: 'waiting',
+          currentRound: 1,
+          activePlayerIndex: 0
+        };
+      } else {
+        // Ensure host is in the room if restoring
+        if (!state.players[session.myId]) {
+          state.players[session.myId] = createPlayer(session.myId, session.playerName);
+          if (!state.playerOrder.includes(session.myId)) {
+            state.playerOrder.unshift(session.myId);
+          }
         }
       }
     } else {
@@ -232,10 +245,12 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
       };
     }
     
+    gameStateRef.current = state;
     setRoom(state);
     setIsConnected(true);
 
     const broadcast = (newState: RoomState) => {
+      gameStateRef.current = newState;
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newState));
       setRoom({...newState});
       connectionsRef.current.forEach(c => {
@@ -248,28 +263,35 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
       
       conn.on('open', () => {
         // Send current state immediately
-        conn.send({ type: 'STATE', payload: state });
+        if (gameStateRef.current) {
+          conn.send({ type: 'STATE', payload: gameStateRef.current });
+        }
       });
 
       conn.on('data', (data: any) => {
+        const currentState = gameStateRef.current;
+        if (!currentState) return;
+
         if (data.type === 'JOIN') {
+          const newState = JSON.parse(JSON.stringify(currentState));
           const { id, name } = data.payload;
-          if (!state.players[id]) {
-            if (state.playerOrder.length < 2) {
-              state.players[id] = createPlayer(id, name);
-              state.playerOrder.push(id);
-              if (state.playerOrder.length === 2 && state.status === 'waiting') {
-                state.status = 'playing';
+          if (!newState.players[id]) {
+            if (newState.playerOrder.length < 2) {
+              newState.players[id] = createPlayer(id, name);
+              newState.playerOrder.push(id);
+              if (newState.playerOrder.length === 2 && newState.status === 'waiting') {
+                newState.status = 'playing';
               }
             }
           } else {
-            state.players[id].name = name; // Update name on reconnect
+            newState.players[id].name = name; // Update name on reconnect
           }
-          broadcast(state);
+          broadcast(newState);
         } 
         else if (data.type === 'ACTION') {
-          handleGameAction(state, data.payload.action, data.payload.playerId, data.payload.value);
-          broadcast(state);
+          const newState = JSON.parse(JSON.stringify(currentState));
+          handleGameAction(newState, data.payload.action, data.payload.playerId, data.payload.value);
+          broadcast(newState);
         }
       });
 
@@ -408,10 +430,11 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
   // --- Dispatch Action ---
   const dispatchAction = (action: string, value?: any) => {
     if (session.role === 'host') {
-      if (room) {
-        const newState = JSON.parse(JSON.stringify(room)); // deep copy
+      if (gameStateRef.current) {
+        const newState = JSON.parse(JSON.stringify(gameStateRef.current)); // deep copy
         handleGameAction(newState, action, session.myId, value);
         
+        gameStateRef.current = newState;
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newState));
         setRoom(newState);
         connectionsRef.current.forEach(c => {
