@@ -235,17 +235,86 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
   }, [session]);
 
   const dispatchAction = (action: string, value?: any) => {
-    if (socketRef.current?.connected) {
-      if (action === 'LEAVE_ROOM') {
-        socketRef.current.emit('action', { roomId: session.roomId, playerId: session.myId, action });
-        return;
+    if (!socketRef.current?.connected || !room) return;
+
+    let stateChanged = false;
+    const updated = { ...room, players: { ...room.players } };
+    const p = { ...updated.players[session.myId] };
+
+    // 鉴权判断：仅允许当前回合玩家操作，或者是通用的离开/再来一局动作
+    const isActivePlayer = room.playerOrder[room.activePlayerIndex] === session.myId;
+    if (!isActivePlayer && action !== 'LEAVE_ROOM' && action !== 'PLAY_AGAIN') return;
+
+    if (action === 'LEAVE_ROOM') {
+      updated.status = 'player_left';
+      stateChanged = true;
+    } else if (action === 'TOGGLE_HOLD' && p.hasRolled && p.rollsLeft > 0) {
+      p.held = [...p.held];
+      p.held[value] = !p.held[value];
+      updated.players[session.myId] = p;
+      stateChanged = true;
+    } else if (action === 'ROLL' && p.rollsLeft > 0) {
+      p.dice = p.dice.map((d, i) => p.held[i] ? d : Math.floor(Math.random() * 6) + 1) as DiceFace[];
+      p.rollsLeft -= 1;
+      p.hasRolled = true;
+      updated.players[session.myId] = p;
+      stateChanged = true;
+    } else if (action === 'SCORE' && p.hasRolled && p.scores[value as ScoreCategory] === undefined) {
+      p.scores = { ...p.scores };
+      p.scores[value as ScoreCategory] = calculatePotentialScore(p.dice, value as ScoreCategory);
+
+      // 切换回合重置骰子
+      p.dice = [1, 1, 1, 1, 1];
+      p.held = [false, false, false, false, false];
+      p.rollsLeft = 3;
+      p.hasRolled = false;
+      updated.players[session.myId] = p;
+
+      // 增加计算轮次
+      updated.activePlayerIndex = (updated.activePlayerIndex + 1) % updated.playerOrder.length;
+
+      if (updated.activePlayerIndex === 0) {
+        updated.currentRound += 1;
+        if (updated.currentRound > 12) {
+          updated.status = 'game_over';
+          const p1 = updated.players[updated.playerOrder[0]];
+          const p2 = updated.players[updated.playerOrder[1]];
+          const s1 = getTotalScore(p1);
+          const s2 = getTotalScore(p2);
+          if (s1 > s2) updated.winner = p1.id;
+          else if (s2 > s1) updated.winner = p2.id;
+          else updated.winner = 'tie';
+        }
       }
-      socketRef.current.emit('action', {
-        roomId: session.roomId,
-        playerId: session.myId,
-        action,
-        value
-      });
+      stateChanged = true;
+    } else if (action === 'PLAY_AGAIN') {
+      p.ready = true;
+      updated.players[session.myId] = p;
+
+      const allReady = updated.playerOrder.length === 2 && updated.playerOrder.every(pid => updated.players[pid].ready);
+      if (allReady) {
+        updated.status = 'playing';
+        updated.currentRound = 1;
+        updated.activePlayerIndex = 0;
+        updated.winner = undefined;
+        for (const pid of updated.playerOrder) {
+          const pObj = { ...updated.players[pid] };
+          pObj.scores = {};
+          pObj.ready = false;
+          pObj.dice = [1, 1, 1, 1, 1];
+          pObj.held = [false, false, false, false, false];
+          pObj.rollsLeft = 3;
+          pObj.hasRolled = false;
+          updated.players[pid] = pObj;
+        }
+      }
+      stateChanged = true;
+    }
+
+    if (stateChanged) {
+      setRoom(updated); // 本地极速响应，实现真正的 0 延迟计算
+      // 直接把算好的盘面扔给服务端，服务端只负责群发和保存
+      socketRef.current.emit('update_state', { roomId: session.roomId, state: updated });
     }
   };
 
