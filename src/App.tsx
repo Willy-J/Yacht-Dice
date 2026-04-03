@@ -463,13 +463,27 @@ function GameContainer({ session, onLeave }: { session: SessionData, onLeave: ()
 // --- Game Board UI ---
 function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room: RoomState; myId: string; dispatchAction: (action: string, val?: any) => void; isConnected: boolean; onLeave: () => void }) {
   const me = room.players[myId];
+
+  // If the guest just connected, the host might have sent the initial state 
+  // before processing the guest's JOIN message. We wait until 'me' exists.
+  if (!me) {
+    return (
+      <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 flex items-center justify-center p-4">
+        <div className="animate-pulse flex flex-col items-center">
+          <Dices className="w-16 h-16 text-emerald-500 mb-4" />
+          <p className="text-emerald-800 font-bold">Synchronizing game state...</p>
+        </div>
+      </div>
+    );
+  }
+
   const opponentId = room.playerOrder.find(id => id !== myId);
   const opponent = opponentId ? room.players[opponentId] : null;
 
   const isActivePlayer = room.playerOrder[room.activePlayerIndex] === myId;
   const activePlayer = room.players[room.playerOrder[room.activePlayerIndex]];
 
-  if (room.status === 'waiting') {
+  if (room.status === 'waiting' || !activePlayer) {
     return (
       <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-50 to-teal-100 text-neutral-800 flex flex-col items-center justify-center p-4">
         <div className="absolute top-4 right-4">
