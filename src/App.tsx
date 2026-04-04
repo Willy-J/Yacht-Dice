@@ -418,7 +418,7 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
 
         {/* Left/Top: Scorecard */}
         <div className={cn(
-          "flex-shrink-0 bg-white/40 border-r border-emerald-100 overflow-y-auto custom-scrollbar",
+          "flex-1 lg:flex-none bg-white/40 lg:border-r border-b lg:border-b-0 border-emerald-100 overflow-y-auto custom-scrollbar relative",
           room.status === 'game_over' ? "w-full lg:w-1/2" : "w-full lg:w-[400px]"
         )}>
           <Scorecard room={room} myId={myId} opponent={opponent} me={me} isActivePlayer={isActivePlayer} dispatchAction={dispatchAction} />
@@ -426,7 +426,7 @@ function GameBoard({ room, myId, dispatchAction, isConnected, onLeave }: { room:
 
         {/* Right/Bottom: Table & Dice OR Game Over */}
         <div className={cn(
-          "flex-1 flex flex-col items-center justify-center relative p-4 lg:p-8",
+          "shrink-0 lg:flex-1 flex flex-col items-center justify-center relative p-4 lg:p-8 z-10 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)] lg:shadow-none bg-white lg:bg-transparent",
           room.status === 'game_over' ? "bg-white/60" : ""
         )}>
           {room.status === 'game_over' ? (
@@ -599,7 +599,7 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
     const oppPotentialScore = oppCanScore && opponent ? calculatePotentialScore(opponent.dice, cat.id) : null;
 
     return (
-      <div key={cat.id} className="grid grid-cols-[1fr_80px_80px] border-b border-emerald-100 hover:bg-emerald-50/50 transition-colors group flex-1">
+      <div key={cat.id} className="grid grid-cols-[1fr_80px_80px] border-b border-emerald-100 hover:bg-emerald-50/50 transition-colors group flex-none lg:flex-1">
         <div className="py-1.5 px-3 lg:px-4 flex flex-col justify-center">
           <span className="font-bold text-neutral-800 text-sm">{cat.name}</span>
           <span className="text-[10px] text-neutral-500 uppercase tracking-wider">{cat.description}</span>
@@ -644,8 +644,8 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
   const oppUpperSum = opponent ? getUpperSum(opponent) : 0;
 
   return (
-    <div className="p-4 lg:p-6 pb-24 lg:pb-6 h-full">
-      <div className="bg-white rounded-2xl border border-emerald-200 shadow-xl overflow-hidden h-full flex flex-col">
+    <div className="p-4 lg:p-6 min-h-full">
+      <div className="bg-white rounded-2xl border border-emerald-200 shadow-xl overflow-hidden min-h-full flex flex-col">
 
         {/* Table Header */}
         <div className="grid grid-cols-[1fr_80px_80px] bg-emerald-50 border-b border-emerald-200 shrink-0">
@@ -659,7 +659,7 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
         </div>
 
         {/* Upper Section */}
-        <div className="bg-white flex flex-col flex-1 min-h-0">
+        <div className="bg-white flex flex-col flex-none lg:flex-1 lg:min-h-0">
           {CATEGORIES.slice(0, 6).map(renderRow)}
 
           {/* Subtotal & Bonus */}
@@ -682,7 +682,7 @@ function Scorecard({ room, myId, opponent, me, isActivePlayer, dispatchAction }:
         </div>
 
         {/* Lower Section */}
-        <div className="bg-white flex flex-col flex-1 min-h-0">
+        <div className="bg-white flex flex-col flex-none lg:flex-1 lg:min-h-0">
           {CATEGORIES.slice(6).map(renderRow)}
         </div>
 
